@@ -1,23 +1,23 @@
-# Fully Loaded Personal Finance Manager App
+# ==============================
+# FINAL PERSONAL FINANCE MANAGER
+# ==============================
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import csv
-import os
+import csv, os
 from datetime import datetime
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
 from collections import defaultdict
 
-# --- File to store data ---
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.chart import PieChart, Reference
+
+# ---------- CONFIG ----------
 DATA_FILE = "finance_data.csv"
 
-# --- Initialize CSV if not exist ---
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Date", "Type", "Category", "Amount", "Note"])
-
-# --- Budget settings (for alerts) ---
 BUDGETS = {
     "Food": 5000,
     "Shopping": 3000,
@@ -25,194 +25,246 @@ BUDGETS = {
     "Bills": 7000
 }
 
-# --- Helper Functions ---
-def add_entry():
-    date = date_entry.get()
-    entry_type = type_var.get()
-    category = category_entry.get()
-    amount = amount_entry.get()
-    note = note_entry.get()
+THEMES = {
+    "light": {"bg": "#f5f5f5", "fg": "#000000"},
+    "dark": {"bg": "#1e1e1e", "fg": "#ffffff"}
+}
 
-    if not (date and entry_type and category and amount):
-        messagebox.showwarning("Input Error", "Please fill all required fields!")
-        return
+current_theme = "light"
 
-    try:
-        amount = float(amount)
-    except:
-        messagebox.showerror("Input Error", "Amount must be a number!")
-        return
+# ---------- INIT CSV ----------
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w", newline="") as f:
+        csv.writer(f).writerow(["Date", "Type", "Category", "Amount", "Note"])
 
-    # Save to CSV
-    with open(DATA_FILE, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow([date, entry_type, category, amount, note])
-
-    clear_inputs()
-    update_summary()
-    messagebox.showinfo("Success", f"{entry_type} entry added!")
-
-def clear_inputs():
-    date_entry.delete(0, tk.END)
-    category_entry.delete(0, tk.END)
-    amount_entry.delete(0, tk.END)
-    note_entry.delete(0, tk.END)
-
+# ---------- FUNCTIONS ----------
 def read_data():
     data = []
-    with open(DATA_FILE, mode='r') as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            row['Amount'] = float(row['Amount'])
-            data.append(row)
+    with open(DATA_FILE) as f:
+        for r in csv.DictReader(f):
+            r["Amount"] = float(r["Amount"])
+            data.append(r)
     return data
 
-def update_summary():
+def add_entry():
+    try:
+        amt = float(amount_entry.get())
+        date = date_entry.get()
+        datetime.strptime(date, "%Y-%m-%d")
+    except:
+        messagebox.showerror("Error", "Invalid input")
+        return
+
+    with open(DATA_FILE, "a", newline="") as f:
+        csv.writer(f).writerow([
+            date,
+            type_var.get(),
+            category_entry.get(),
+            amt,
+            note_entry.get()
+        ])
+
+    clear_inputs()
+    refresh()
+
+def clear_inputs():
+    for e in (date_entry, category_entry, amount_entry, note_entry):
+        e.delete(0, tk.END)
+
+def refresh():
     data = read_data()
-    total_income = sum(d['Amount'] for d in data if d['Type']=="Income")
-    total_expense = sum(d['Amount'] for d in data if d['Type']=="Expense")
-    balance = total_income - total_expense
+    month = month_var.get()
 
-    income_label.config(text=f"Total Income: ₹{total_income}")
-    expense_label.config(text=f"Total Expense: ₹{total_expense}")
-    balance_label.config(text=f"Balance: ₹{balance}")
+    if month != "All":
+        data = [d for d in data if d["Date"].startswith(month)]
 
-    # Budget alerts
-    alert_text = ""
-    expense_by_cat = defaultdict(float)
+    total_income = sum(d["Amount"] for d in data if d["Type"] == "Income")
+    total_expense = sum(d["Amount"] for d in data if d["Type"] == "Expense")
+
+    income_lbl.config(text=f"Total Income: ₹{total_income}")
+    expense_lbl.config(text=f"Total Expense: ₹{total_expense}")
+    balance_lbl.config(text=f"Balance: ₹{total_income-total_expense}")
+
+    show_alerts(data)
+    plot_pie(data)
+    plot_trend(data)
+
+def show_alerts(data):
+    alerts = ""
+    spent = defaultdict(float)
+
     for d in data:
-        if d['Type'] == "Expense":
-            expense_by_cat[d['Category']] += d['Amount']
-    for cat, spent in expense_by_cat.items():
-        if cat in BUDGETS and spent > BUDGETS[cat]:
-            alert_text += f"⚠️ {cat} exceeded budget!\n"
-    alert_label.config(text=alert_text)
+        if d["Type"] == "Expense":
+            spent[d["Category"]] += d["Amount"]
 
-    # Update charts
-    plot_expense_chart(data)
-    plot_trend_chart(data)
+    for c,v in spent.items():
+        if c in BUDGETS and v > BUDGETS[c]:
+            alerts += f"⚠ {c} exceeded budget\n"
 
-def plot_expense_chart(data):
-    categories = defaultdict(float)
-    for d in data:
-        if d['Type'] == "Expense":
-            categories[d['Category']] += d['Amount']
+    alert_lbl.config(text=alerts)
 
+def plot_pie(data):
     pie_fig.clear()
     ax = pie_fig.add_subplot(111)
-    if categories:
-        ax.pie(categories.values(), labels=categories.keys(), autopct="%1.1f%%", startangle=140)
-        ax.set_title("Expenses by Category", fontsize=14)
+
+    cat = defaultdict(float)
+    for d in data:
+        if d["Type"] == "Expense":
+            cat[d["Category"]] += d["Amount"]
+
+    if cat:
+        ax.pie(cat.values(), labels=cat.keys(), autopct="%1.1f%%")
+        ax.set_title("Expenses by Category")
     else:
-        ax.text(0.5, 0.5, "No expense data yet!", ha='center', va='center', fontsize=14)
-        ax.axis('off')
+        ax.text(0.5,0.5,"No data",ha="center",va="center")
+        ax.axis("off")
+
     pie_canvas.draw()
 
-def plot_trend_chart(data):
-    monthly_income = defaultdict(float)
-    monthly_expense = defaultdict(float)
-    for d in data:
-        month = datetime.strptime(d['Date'], "%Y-%m-%d").strftime("%Y-%m")
-        if d['Type'] == "Income":
-            monthly_income[month] += d['Amount']
-        else:
-            monthly_expense[month] += d['Amount']
-
-    months = sorted(list(set(list(monthly_income.keys()) + list(monthly_expense.keys()))))
-    income_vals = [monthly_income[m] for m in months]
-    expense_vals = [monthly_expense[m] for m in months]
-
+def plot_trend(data):
     trend_fig.clear()
     ax = trend_fig.add_subplot(111)
+
+    inc, exp = defaultdict(float), defaultdict(float)
+
+    for d in data:
+        m = d["Date"][:7]
+        if d["Type"] == "Income": inc[m]+=d["Amount"]
+        else: exp[m]+=d["Amount"]
+
+    months = sorted(set(inc)|set(exp))
     if months:
-        ax.plot(months, income_vals, marker='o', label="Income", color="green")
-        ax.plot(months, expense_vals, marker='o', label="Expense", color="red")
-        ax.set_title("Monthly Income vs Expense", fontsize=14)
-        ax.set_ylabel("Amount (₹)")
-        ax.set_xlabel("Month")
+        ax.plot(months,[inc[m] for m in months],label="Income",marker="o")
+        ax.plot(months,[exp[m] for m in months],label="Expense",marker="o")
         ax.legend()
         ax.grid(True)
     else:
-        ax.text(0.5, 0.5, "No data yet!", ha='center', va='center', fontsize=14)
-        ax.axis('off')
+        ax.text(0.5,0.5,"No data",ha="center",va="center")
+        ax.axis("off")
+
+    ax.set_title("Monthly Trend")
     trend_canvas.draw()
 
-def export_report():
+def export_excel():
     data = read_data()
     if not data:
-        messagebox.showwarning("No Data", "No data to export!")
         return
-    file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files","*.csv")])
-    if file_path:
-        with open(file_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["Date", "Type", "Category", "Amount", "Note"])
-            for d in data:
-                writer.writerow([d['Date'], d['Type'], d['Category'], d['Amount'], d['Note']])
-        messagebox.showinfo("Exported", f"Report exported to {file_path}")
 
-# --- GUI Setup ---
+    path = filedialog.asksaveasfilename(defaultextension=".xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Finance"
+
+    headers = ["Date","Type","Category","Amount","Note"]
+    for i,h in enumerate(headers,1):
+        c = ws.cell(row=1,column=i,value=h)
+        c.font = Font(bold=True)
+        c.fill = PatternFill("solid", fgColor="FFD966")
+
+    for r,d in enumerate(data,2):
+        ws.append([d[h] for h in headers])
+
+    # Excel Pie Chart
+    pie = PieChart()
+    pie.title = "Expenses"
+    cats = defaultdict(float)
+    for d in data:
+        if d["Type"]=="Expense":
+            cats[d["Category"]]+=d["Amount"]
+
+    row = len(data)+3
+    ws.cell(row=row,column=1,value="Category")
+    ws.cell(row=row,column=2,value="Amount")
+
+    for i,(c,v) in enumerate(cats.items(),row+1):
+        ws.cell(row=i,column=1,value=c)
+        ws.cell(row=i,column=2,value=v)
+
+    pie.add_data(Reference(ws,row+1,row+len(cats),2,2))
+    pie.set_categories(Reference(ws,row+1,row+len(cats),1,1))
+    ws.add_chart(pie,"G2")
+
+    wb.save(path)
+    messagebox.showinfo("Done","Excel exported successfully")
+
+def toggle_theme():
+    global current_theme
+    current_theme = "dark" if current_theme=="light" else "light"
+    apply_theme()
+
+def apply_theme():
+    t = THEMES[current_theme]
+    root.configure(bg=t["bg"])
+    for w in root.winfo_children():
+        try:
+            w.configure(bg=t["bg"], fg=t["fg"])
+        except:
+            pass
+
+# ---------- UI ----------
 root = tk.Tk()
-root.title("Personal Finance Manager - Full Version")
-root.geometry("1000x700")
-root.resizable(True, True)
+root.title("Personal Finance Manager – FINAL")
+root.geometry("1100x720")
 
-# --- Input Frame ---
-input_frame = tk.Frame(root, padx=10, pady=10)
-input_frame.pack(fill=tk.X)
+# Inputs
+top = tk.Frame(root)
+top.pack(fill="x",padx=10,pady=5)
 
-tk.Label(input_frame, text="Date (YYYY-MM-DD):", font=("Arial", 11)).grid(row=0, column=0, sticky="w")
-date_entry = tk.Entry(input_frame, font=("Arial", 11))
-date_entry.grid(row=0, column=1, sticky="w")
+tk.Label(top,text="Date").grid(row=0,column=0)
+date_entry = tk.Entry(top); date_entry.grid(row=0,column=1)
 
-type_var = tk.StringVar()
-type_var.set("Expense")
-tk.Radiobutton(input_frame, text="Expense", variable=type_var, value="Expense", font=("Arial", 11)).grid(row=0, column=2)
-tk.Radiobutton(input_frame, text="Income", variable=type_var, value="Income", font=("Arial", 11)).grid(row=0, column=3)
+type_var = tk.StringVar(value="Expense")
+tk.Radiobutton(top,text="Expense",variable=type_var,value="Expense").grid(row=0,column=2)
+tk.Radiobutton(top,text="Income",variable=type_var,value="Income").grid(row=0,column=3)
 
-tk.Label(input_frame, text="Category:", font=("Arial", 11)).grid(row=1, column=0, sticky="w")
-category_entry = tk.Entry(input_frame, font=("Arial", 11))
-category_entry.grid(row=1, column=1, sticky="w")
+tk.Label(top,text="Category").grid(row=1,column=0)
+category_entry = tk.Entry(top); category_entry.grid(row=1,column=1)
 
-tk.Label(input_frame, text="Amount:", font=("Arial", 11)).grid(row=1, column=2, sticky="w")
-amount_entry = tk.Entry(input_frame, font=("Arial", 11))
-amount_entry.grid(row=1, column=3, sticky="w")
+tk.Label(top,text="Amount").grid(row=1,column=2)
+amount_entry = tk.Entry(top); amount_entry.grid(row=1,column=3)
 
-tk.Label(input_frame, text="Note:", font=("Arial", 11)).grid(row=2, column=0, sticky="w")
-note_entry = tk.Entry(input_frame, width=50, font=("Arial", 11))
-note_entry.grid(row=2, column=1, columnspan=3, sticky="w")
+tk.Label(top,text="Note").grid(row=2,column=0)
+note_entry = tk.Entry(top,width=40); note_entry.grid(row=2,column=1,columnspan=3)
 
-tk.Button(input_frame, text="Add Entry", command=add_entry, bg="green", fg="white", font=("Arial", 12)).grid(row=3, column=0, columnspan=4, pady=10)
-tk.Button(input_frame, text="Export Report", command=export_report, bg="blue", fg="white", font=("Arial", 12)).grid(row=4, column=0, columnspan=4, pady=5)
+tk.Button(top,text="Add Entry",command=add_entry,bg="green",fg="white").grid(row=3,column=0,columnspan=4,pady=5)
 
-# --- Summary Frame ---
-summary_frame = tk.Frame(root, padx=10, pady=10)
-summary_frame.pack(fill=tk.X)
+# Controls
+ctrl = tk.Frame(root)
+ctrl.pack(fill="x")
 
-income_label = tk.Label(summary_frame, text="Total Income: ₹0", font=("Arial", 12))
-income_label.pack(anchor="w")
-expense_label = tk.Label(summary_frame, text="Total Expense: ₹0", font=("Arial", 12))
-expense_label.pack(anchor="w")
-balance_label = tk.Label(summary_frame, text="Balance: ₹0", font=("Arial", 12, "bold"))
-balance_label.pack(anchor="w")
-alert_label = tk.Label(summary_frame, text="", font=("Arial", 12), fg="red")
-alert_label.pack(anchor="w")
+month_var = tk.StringVar(value="All")
+months = sorted({d["Date"][:7] for d in read_data()})
+ttk.Combobox(ctrl,textvariable=month_var,values=["All"]+months,width=10).pack(side="left",padx=5)
+tk.Button(ctrl,text="Refresh",command=refresh).pack(side="left")
+tk.Button(ctrl,text="Export Excel",command=export_excel).pack(side="left",padx=5)
+tk.Button(ctrl,text="Toggle Theme",command=toggle_theme).pack(side="left")
 
-# --- Chart Frames ---
-chart_frame = tk.Frame(root, padx=10, pady=10)
-chart_frame.pack(fill=tk.BOTH, expand=True)
+# Summary
+summary = tk.Frame(root)
+summary.pack(fill="x",padx=10)
 
-# Expense Pie Chart
+income_lbl = tk.Label(summary)
+expense_lbl = tk.Label(summary)
+balance_lbl = tk.Label(summary,font=("Arial",11,"bold"))
+alert_lbl = tk.Label(summary,fg="red")
+
+income_lbl.pack(anchor="w")
+expense_lbl.pack(anchor="w")
+balance_lbl.pack(anchor="w")
+alert_lbl.pack(anchor="w")
+
+# Charts
+charts = tk.Frame(root)
+charts.pack(fill="both",expand=True)
+
 pie_fig = plt.Figure(figsize=(5,4))
-pie_canvas = FigureCanvasTkAgg(pie_fig, master=chart_frame)
-pie_canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+pie_canvas = FigureCanvasTkAgg(pie_fig,charts)
+pie_canvas.get_tk_widget().pack(side="left",fill="both",expand=True)
 
-# Monthly Trend Chart
 trend_fig = plt.Figure(figsize=(5,4))
-trend_canvas = FigureCanvasTkAgg(trend_fig, master=chart_frame)
-trend_canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+trend_canvas = FigureCanvasTkAgg(trend_fig,charts)
+trend_canvas.get_tk_widget().pack(side="left",fill="both",expand=True)
 
-# --- Initialize ---
-update_summary()
-
+apply_theme()
+refresh()
 root.mainloop()
