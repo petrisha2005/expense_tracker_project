@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.env/
+
+# Local data files
+finance_data.csv
+
+# Excel exports
+*.xlsx
+
+# OS files
+.DS_Store
+
+# IDE settings
+.vscode/
+.idea/
